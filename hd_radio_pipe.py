@@ -3,6 +3,41 @@
 from gnuradio import gr, blocks, filter
 import osmosdr
 
+"""
+Amplifier settings:
+
+LNA (Low Noise Amplifier) is the first gain stage right at the antenna input - it
+amplifies the weak incoming RF signal before it hits the mixer. You want just enough
+LNA gain to lift signals above the noise floor without overloading the front end.
+Too much and strong signals will clip and create spurious images across the waterfall.
+
+VGA (Variable Gain Amplifier) is the baseband/IF gain stage that comes after the mixer
+has downconverted the signal. It amplifies the intermediate signal before it hits the
+ADC. This is where you adjust the overall signal level to fill the ADC's dynamic range
+without clipping.
+
+The general approach: start with LNA low and VGA mid-range, then bring up the LNA until
+you can see the signals you're interested in. If the noise floor rises too much or you
+see phantom signals appearing, back off the LNA and compensate with VGA instead. LNA gain
+is "expensive" in terms of noise and overload risk; VGA gain is "cheaper" but can't
+recover signals that were lost in the noise before the mixer.
+
+Conservative starting values were selected that wouldn't overload the HackRF front end:
+* RF amp off (0) - the HackRF's RF amp adds 14dB in one step and can easily overload on
+  strong FM broadcast signals. 105.7 is your strongest station, so leaving it off avoids
+  clipping.
+* IF/LNA at 32 - mid-range of the 0-40dB range. Enough gain to get a good signal level
+  without saturating. (0-40dB in 8dB steps)
+* BB/VGA at 20 - low-to-mid in the 0-62dB range. Conservative, lets the ADC fill without
+  clipping. (0-62dB in 2dB steps)
+
+Sample rate:
+
+2.016 MHz was chosen because it's close to the HackRF's minimum (2 MHz) and the ratio
+to 1,488,375 Hz reduces to a clean fraction (3969/5376).  Lower sample rate means less
+data throughput over USB and less CPU work in the resampler.
+"""
+
 class HDRadioPipeline(gr.top_block):
     def __init__(self):
         gr.top_block.__init__(self)
