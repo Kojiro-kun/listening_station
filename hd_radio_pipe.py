@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+import argparse
+import os
+import stat
 from gnuradio import gr, blocks, filter
 import osmosdr
 
@@ -39,17 +42,21 @@ data throughput over USB and less CPU work in the resampler.
 """
 
 class HDRadioPipeline(gr.top_block):
-    def __init__(self):
+    def __init__(self, center_freq_mhz: float, fifo_path: str):
         gr.top_block.__init__(self)
 
         # HackRF source at 2.016 MHz (clean multiple for resampling)
         self.source = osmosdr.source(args="hackrf=0")
+        # HackRF minimum sample rate is 2 MHz, so we use 2.016 MHz to
+        # get a clean resampling ratio down to 1.488375 MHz.
         self.source.set_sample_rate(2016000)
-        self.source.set_center_freq(105.7e6)
+        self.source.set_center_freq(center_freq_mhz * 1e6)
         self.source.set_gain(0, 'RF')
         self.source.set_gain(32, 'IF')
         self.source.set_gain(20, 'BB')
 
+        # Convert the sample rate from 2,016,000 Hz to 1,488,375 Hz.
+        # This target rate is what nrsc5 expects.
         # Rational resampler: 2016000 -> 1488375
         # GCD(2016000, 1488375) = 375
         # 2016000 / 375 = 5376
@@ -73,7 +80,7 @@ class HDRadioPipeline(gr.top_block):
         self.interleave = blocks.interleave(gr.sizeof_char, 1)
 
         # File sink to FIFO
-        self.sink = blocks.file_sink(gr.sizeof_char, "/tmp/hd_radio.pipe")
+        self.sink = blocks.file_sink(gr.sizeof_char, fifo_path)
 
         # Connect
         self.connect(self.source, self.resampler, self.complex_to_float)
@@ -82,7 +89,25 @@ class HDRadioPipeline(gr.top_block):
         self.connect(self.interleave, self.sink)
 
 if __name__ == "__main__":
-    tb = HDRadioPipeline()
+    parser = argparse.ArgumentParser(description="HD Radio GNU Radio pipeline")
+    parser.add_argument("--freq", type=float, default=105.7,
+                        help="Center frequency in MHz (e.g. 105.7)")
+    parser.add_argument("--fifo", default="/tmp/hd_radio.pipe",
+                        help="Path to the output FIFO")
+    args = parser.parse_args()
+
+    if not (87.0 <= args.freq <= 109.0):
+        parser.error(f"--freq {args.freq} is outside the valid FM range (87.0-109.0 MHz)")
+
+    if not os.path.exists(args.fifo):
+        os.mkfifo(args.fifo, mode=0o600)
+    elif not stat.S_ISFIFO(os.stat(args.fifo).st_mode):
+        parser.error(f"{args.fifo} exists but is not a FIFO")
+
+    try:
+      tb = HDRadioPipeline(center_freq_mhz=args.freq, fifo_path=args.fifo)
+    except RuntimeError as e:
+      parser.error(f"Failed to initialize HackRF source: {e}")
     tb.start()
     input("Press Enter to stop...")
     tb.stop()
